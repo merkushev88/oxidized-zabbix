@@ -19,6 +19,7 @@ pass_backup = ""
 #last 57 this is id group
 selected_group_id = "57" #указать номер группы в zabbix
 
+
 auth_payload = {
     "jsonrpc": "2.0",
     "method": "user.login",
@@ -39,13 +40,14 @@ else:
     print("Ошибка аутентификации:", auth_result.get("error", {}).get("data", "Нет данных"))
     exit()
 
-# Получение узлов выбранной группы
+# get active nodes
 host_payload = {
     "jsonrpc": "2.0",
     "method": "host.get",
     "params": {
         "output": ["hostid", "host"],
-        "groupids": selected_group_id
+        "groupids": selected_group_id,
+        "filter": {"status": "0"}  # 0 = Active node
     },
     "auth": auth_token,
     "id": 3
@@ -65,48 +67,52 @@ if "result" in host_result:
             for line in file:
                 existing_entries.add(line.strip())
     except FileNotFoundError:
-        pass  # Ingnore file, not create file router.db
+        pass  # Если файла нет, игнорируем
 
-    # open file and add new string
-    with open(filename, "a") as file:
-        for host in hosts:
-            host_id = host['hostid']
-            host_name = host['host']
+    
+    new_entries = set()
 
-            interface_payload = {
-                "jsonrpc": "2.0",
-                "method": "hostinterface.get",
-                "params": {
-                    "output": ["ip"],
-                    "hostids": host_id
-                },
-                "auth": auth_token,
-                "id": 5
-            }
+    for host in hosts:
+        host_id = host['hostid']
+        host_name = host['host']
 
-            response = requests.post(zabbix_url, json=interface_payload)
-            interface_result = response.json()
+        interface_payload = {
+            "jsonrpc": "2.0",
+            "method": "hostinterface.get",
+            "params": {
+                "output": ["ip"],
+                "hostids": host_id
+            },
+            "auth": auth_token,
+            "id": 5
+        }
 
-            if "result" in interface_result:
-                interfaces = interface_result["result"]
-                if interfaces:
-                    ip_address = interfaces[0]["ip"]
-                    entry = f"{host_name}:{vender_backup}:{ip_address}:{user_backup}:{pass_backup}"
-                    if entry not in existing_entries:
-                        file.write(f"{entry}\n")
-                else:
-                    error_message = f"Ошибка {host_id}, {host_name}, IP: Не найден"
-                    if error_message not in existing_entries:
-                        file.write(f"{error_message}\n")
-            else:
-                error_message = f"Ошибка при получении IP-адреса для узла {host_name}"
-                if error_message not in existing_entries:
-                    file.write(f"{error_message}\n")
+        response = requests.post(zabbix_url, json=interface_payload)
+        interface_result = response.json()
+
+        if "result" in interface_result:
+            interfaces = interface_result["result"]
+            if interfaces:
+                ip_address = interfaces[0]["ip"]
+                entry = f"{host_name}:{vender_backup}:{ip_address}:{user_backup}:{pass_backup}"
+                new_entries.add(entry)
+
+    #
+    with open(filename, "w") as file:
+        # write only new 
+        for entry in new_entries:
+            file.write(f"{entry}\n")
+
+    # remove node if delete or disable zabbix
+    removed_entries = existing_entries - new_entries
+    if removed_entries:
+        print(f"Удалены записи из router.db: {removed_entries}")
+
 else:
     print("Ошибка при получении узлов:", host_result.get("error", {}).get("data", "Нет данных"))
     exit()
 
-# Завершение сессии
+
 logout_payload = {
     "jsonrpc": "2.0",
     "method": "user.logout",
