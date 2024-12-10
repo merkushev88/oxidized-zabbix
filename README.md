@@ -1,4 +1,5 @@
 # oxidized-zabbix
+https://github.com/ytti/oxidized
 script import device from zabbix API to oxidized
 
 example config map device 
