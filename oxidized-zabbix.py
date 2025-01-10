@@ -1,24 +1,31 @@
 import requests
 import json
+import os
 
-#zabbix  api
-zabbix_url = "https://zabbix-server.net/api_jsonrpc.php"
-zabbix_user = ""
-zabbix_password = ""
+zabbix_url = "http://zabbix_server/api_jsonrpc.php"
+zabbix_user = "user_zabbix"
+zabbix_password = "password"
 
-#vender https://github.com/ytti/oxidized/blob/master/docs/Supported-OS-Types.md
-vender_backup = "routeros"
-#Credentinal for backup users 
-user_backup = ""
-pass_backup = ""
-#enable = "password" #включение enable если используем, то добавляем file.write в самый конец {enable}
+# Senttings Zabbix group and device oxidized
+groups_config = {
+    "routeros": {
+        "filename": "/some/path/to/filedb/router.db",
+        "vendor": "routeros",
+        "user": "backup_user",
+        "password": "backup_password_device",
+        "zabbix_group_id": "1"  # ID group in Zabbix
+    },
+    "asa-cisco": {
+        "filename": "/home/adminlinux/.config/oxidized/router.db",
+        "vendor": "asa",
+        "user": "backup_user",
+        "password": "password_backup",
+        "enable_password": "enable_passeword",
+        "enable_level": "3", 
+       "zabbix_group_id": "2"  # ID group in Zabbix
+    }
 
-#Номер группы 
-#how to search id group
-#https://zabbix-server.net/zabbix.php?action=host.list&filter_set=1&filter_groups%5B0%5D=57
-#last 57 this is id group
-selected_group_id = "57" #указать номер группы в zabbix
-
+}
 
 auth_payload = {
     "jsonrpc": "2.0",
@@ -27,8 +34,7 @@ auth_payload = {
         "user": zabbix_user,
         "password": zabbix_password
     },
-    "id": 1,
-    "auth": None
+    "id": 1
 }
 
 response = requests.post(zabbix_url, json=auth_payload)
@@ -37,82 +43,81 @@ auth_result = response.json()
 if "result" in auth_result:
     auth_token = auth_result["result"]
 else:
-    print("Ошибка аутентификации:", auth_result.get("error", {}).get("data", "Нет данных"))
+    print("ERROR AUTH:", auth_result.get("error", {}).get("data", "Some error"))
     exit()
 
-# get active nodes
-host_payload = {
-    "jsonrpc": "2.0",
-    "method": "host.get",
-    "params": {
-        "output": ["hostid", "host"],
-        "groupids": selected_group_id,
-        "filter": {"status": "0"}  # 0 = Active node
-    },
-    "auth": auth_token,
-    "id": 3
-}
+for group in groups_config.values():
+    with open(group["filename"], "w") as file:
+        pass
 
-response = requests.post(zabbix_url, json=host_payload)
-host_result = response.json()
-
-if "result" in host_result:
-    hosts = host_result["result"]
-
-    # Проверяем существующие записи в router.db
-    filename = "router.db"
-    existing_entries = set()
-    try:
-        with open(filename, "r") as file:
-            for line in file:
-                existing_entries.add(line.strip())
-    except FileNotFoundError:
-        pass  # Если файла нет, игнорируем
-
+for group_name, group in groups_config.items():
+    print(f"Обрабатывается группа: {group_name}")
     
-    new_entries = set()
+    host_payload = {
+        "jsonrpc": "2.0",
+        "method": "host.get",
+        "params": {
+            "output": ["hostid", "host"],
+            "groupids": group["zabbix_group_id"],
+            "filter": {
+                "status": "0"  # ONLY active device
+            }
+        },
+        "auth": auth_token,
+        "id": 2
+    }
 
-    for host in hosts:
-        host_id = host['hostid']
-        host_name = host['host']
+    response = requests.post(zabbix_url, json=host_payload)
+    host_result = response.json()
 
-        interface_payload = {
-            "jsonrpc": "2.0",
-            "method": "hostinterface.get",
-            "params": {
-                "output": ["ip"],
-                "hostids": host_id
-            },
-            "auth": auth_token,
-            "id": 5
-        }
+    if "result" in host_result:
+        hosts = host_result["result"]
 
-        response = requests.post(zabbix_url, json=interface_payload)
-        interface_result = response.json()
+        
+        for host in hosts:
+            host_id = host['hostid']
+            host_name = host['host']
 
-        if "result" in interface_result:
-            interfaces = interface_result["result"]
-            if interfaces:
-                ip_address = interfaces[0]["ip"]
-                entry = f"{host_name}:{vender_backup}:{ip_address}:{user_backup}:{pass_backup}"
-                new_entries.add(entry)
+            
+            interface_payload = {
+                "jsonrpc": "2.0",
+                "method": "hostinterface.get",
+                "params": {
+                    "output": ["ip"],
+                    "hostids": host_id
+                },
+                "auth": auth_token,
+                "id": 3
+            }
 
-    #
-    with open(filename, "w") as file:
-        # write only new 
-        for entry in new_entries:
-            file.write(f"{entry}\n")
+            response = requests.post(zabbix_url, json=interface_payload)
+            interface_result = response.json()
 
-    # remove node if delete or disable zabbix
-    removed_entries = existing_entries - new_entries
-    if removed_entries:
-        print(f"Удалены записи из router.db: {removed_entries}")
+            if "result" in interface_result:
+                interfaces = interface_result["result"]
+                if interfaces:
+                    ip_address = interfaces[0]["ip"]
 
-else:
-    print("Ошибка при получении узлов:", host_result.get("error", {}).get("data", "Нет данных"))
-    exit()
+                    # String for save router.db
+                    line = f"{host_name}:{group['vendor']}:{ip_address}:{group['user']}:{group['password']}"
 
+                    # If you need something settings,  enable, level etc
+                    if group.get("enable_password"):
+                        line += f":{group['enable_password']}"
 
+                    if group.get("enable_level"):
+                        line += f":{group['enable_level']}"
+
+                    # Save routerdb
+                    with open(group["filename"], "a") as file:
+                        file.write(line + "\n")
+
+                else:
+                    print(f"Device {host_name} did'nt have IP.")
+            else:
+                print(f"Error read device {host_name}.")
+    else:
+        print(f"Eror {group_name}: {host_result.get('error', {}).get('data', 'Unknow error')}")
 logout_payload = {
     "jsonrpc": "2.0",
     "method": "user.logout",
@@ -122,3 +127,4 @@ logout_payload = {
 }
 
 requests.post(zabbix_url, json=logout_payload)
+print("Finish.")
