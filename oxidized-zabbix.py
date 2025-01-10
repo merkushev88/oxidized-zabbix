@@ -16,7 +16,7 @@ groups_config = {
         "zabbix_group_id": "1"  # ID group in Zabbix
     },
     "asa-cisco": {
-        "filename": "/home/adminlinux/.config/oxidized/router.db",
+        "filename": "/some/path/to/filedb/router.db",
         "vendor": "asa",
         "user": "backup_user",
         "password": "password_backup",
